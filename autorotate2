@@ -1,0 +1,233 @@
+#!/usr/bin/python3
+
+#####CONFIGURATION#####
+sensorname="accel_3d"
+
+inputnames=[
+        "NTRG0001:01 1B96:1B05"
+        ]
+
+pennames=[
+        "NTRG0001:01 1B96:1B05 Pen stylus",
+        "NTRG0001:01 1B96:1B05 Pen pad",
+        "NTRG0001:01 1B96:1B05 Pen eraser"
+        ]
+
+#####PROGRAM CODE#####
+#Do not change unless you know what you are doing!
+
+xinput="/usr/bin/xinput"
+xrandr="/usr/bin/xrandr"
+
+resourcepaths=[
+	"./",
+	"/usr/local/share/surface-tools/autorotate2/"
+	]
+
+orientations=[
+        "normal",
+        "inverted",
+        "left",
+        "right"
+        ]
+
+matrices=[
+        [1,0,0,0,1,0,0,0,1],
+        [-1,0,1,0,-1,1,0,0,1],
+        [0,-1,1,1,0,0,0,0,1],
+        [0,1,0,-1,0,1,0,0,1]
+        ]
+
+firstrun=True
+rotlock=False
+
+import pyudev
+import re
+import subprocess
+import os.path
+import signal
+from gi.repository import Gtk, GdkPixbuf, GObject
+
+hasAppIndicator = True
+try:
+    from gi.repository import AppIndicator3 as AppIndicator
+except:
+    hasAppIndicator = False
+
+def twos_comp(val):
+    if val & (1 << (16-1)) != 0:
+        val = val - (1 << 16)
+    return val
+
+def disableTouch(id):
+    subprocess.call([xinput, "disable", id])
+
+def enableTouch(id):
+    subprocess.call([xinput, "enable", id])
+
+def refreshTouch(id):
+    disableTouch(id)
+    enableTouch(id)
+
+def checkDisplays():
+    check_displays = "xrandr | grep -w 'connected'"
+    str_displays = str(subprocess.check_output(check_displays, shell=True).lower().rstrip())
+    list_displays = str_displays.splitlines()
+    int_displays = len(list_displays)
+    return int_displays
+
+def checkNumAxes(id):
+    check_num_axes = "xinput list-props " + id + " | grep 'Axis Labels' | cut -f3 | cut -d ',' -f1-4 --output-delimiter=$'\n'"
+    str_num_axes = str(subprocess.check_output(check_num_axes, shell=True).lower().rstrip())
+    list_num_axes = str_num_axes.splitlines()
+    int_num_axes = len(list_num_axes)
+    return int_num_axes
+
+def checkProximity(id):
+    stylusProximityCommand = 'xinput query-state ' + id + ' | grep Proximity | cut -d " " -f3 | cut -d "=" -f2'
+    return str(subprocess.check_output(stylusProximityCommand, shell=True).lower().rstrip())
+
+def getOrientation(accelX, accelY, accelZ):
+    absAccelX = abs(accelX)
+    absAccelY = abs(accelY)
+    absAccelZ = abs(accelZ)
+
+    if absAccelZ > 4 * absAccelX and absAccelZ > 4 * absAccelY:
+        orientation = "flat"
+    elif 3 * absAccelY > 2 * absAccelX:
+        orientation = "inverted" if accelY > 0 else "normal"
+    else:
+        orientation = "left" if accelX > 0 else "right"
+
+    return orientation
+
+def rotate(orientation, matrix):
+    i = -1
+    for input_ in inputnames:
+        i += 1
+        pattern = re.compile(input_ + " *\tid=([0-9]+)\t")
+        output = subprocess.check_output([xinput, "list"]).decode("unicode_escape")
+        matches = re.findall(pattern, output)
+        if len(matches) == 1:
+            subprocess.call([xrandr, "-o", orientation])
+            subprocess.call([xinput, "set-prop", matches[0], "Coordinate Transformation Matrix"] + [str(m) for m in matrix])
+            penpattern = re.compile(pennames[i] + " *\tid=([0-9]+)\t")
+            penmatches = re.findall(penpattern, output)
+            for id in penmatches:
+                subprocess.call([xinput, "map-to-output", id, "eDP1"])
+                #subprocess.call([xinput, "set-prop", id, "Coordinate Transformation Matrix"] + [str(m) for m in matrix])
+            refreshTouch(matches[0])
+
+def toggleRotLock(event):
+    global rotlock
+    global icon
+    global lockrot
+    global unlockrot
+
+    rotlock = not rotlock
+    if hasAppIndicator:
+        global toggle
+        icon.set_icon(lockrot if rotlock else unlockrot)
+        toggle.set_label("Unlock Rotation" if rotlock else "Lock Rotation")
+    else:
+        icon.set_from_pixbuf(lockrot if rotlock else unlockrot)
+
+def checkRotation():
+    checkRotationIntl()
+    GObject.timeout_add(1000, checkRotation)
+
+def checkRotationIntl():
+    if not rotlock:
+        orientation = "normal"
+        if int_displays == 1:
+            device = pyudev.Device.from_path(context, path)
+            accelX = twos_comp(device.attributes.asint("in_accel_x_raw"))
+            accelY = twos_comp(device.attributes.asint("in_accel_y_raw"))
+            accelZ = twos_comp(device.attributes.asint("in_accel_z_raw"))
+
+            orientation = getOrientation(accelX, accelY, accelZ)
+
+        global prevorientation
+        if orientation != prevorientation:
+            i = -1
+            prevorientation = orientation
+            for orientation_ in orientations:
+                i += 1
+                if orientation == orientation_:
+                    print('Rotating to ' + repr(orientation))
+                    rotate(orientation, matrices[i])
+
+def checkPalmReject():
+    i = -1
+    for input_ in inputnames:
+        i += 1
+        pattern = re.compile(input_ + " *\tid=([0-9]+)\t")
+        output = subprocess.check_output([xinput, "list"]).decode("unicode_escape")
+        matches = re.findall(pattern, output)
+        if len(matches) == 1:
+            penpattern = re.compile(pennames[i] + " *\tid=([0-9]+)\t")
+            penmatches = re.findall(penpattern, output)
+            for id in penmatches:
+                if checkNumAxes(id) == 3:
+                    stylusProximityStatus = checkProximity(id)
+                    global firstrun
+                    if stylusProximityStatus == "in" and firstrun == False:
+                        disableTouch(matches[0])
+                    elif stylusProximityStatus == "out":
+                        enableTouch(matches[0])
+                        firstrun = True
+
+    GObject.timeout_add(200, checkPalmReject)
+
+context = pyudev.Context()
+for device in context.list_devices(subsystem="iio").match_attribute("name", sensorname): break
+assert device
+
+path = device.device_path
+
+prevorientation = ""
+
+int_displays = checkDisplays()
+
+for resourcepath in resourcepaths[::-1]:
+    if os.path.isfile(resourcepath + "rotate_lock.png"):
+        if hasAppIndicator:
+            lockrot = resourcepath + "rotate_lock.png"
+        else:
+            lockrot = GdkPixbuf.Pixbuf.new_from_file(resourcepath + "rotate_lock.png")
+
+    if os.path.isfile(resourcepath + "rotate.png"):
+        if hasAppIndicator:
+            unlockrot = resourcepath + "rotate.png"
+        else:
+            unlockrot = GdkPixbuf.Pixbuf.new_from_file(resourcepath + "rotate.png")
+
+
+if __name__ == "__main__":
+    GObject.threads_init()
+
+    global icon
+    if hasAppIndicator:
+        icon = AppIndicator.Indicator.new("autorotate", unlockrot, AppIndicator.IndicatorCategory.APPLICATION_STATUS)
+        icon.set_status(AppIndicator.IndicatorStatus.ACTIVE)
+        menu = Gtk.Menu()
+        global toggle
+        toggle = Gtk.MenuItem("Lock Rotation")
+
+        menu.append(toggle)
+        icon.set_menu(menu)
+        toggle.show()
+
+        toggle.connect("activate", toggleRotLock)
+    else:
+        icon = Gtk.StatusIcon.new_from_pixbuf(unlockrot)
+        icon.connect("activate", toggleRotLock)
+
+    # Ctrl-c now kills the scipt
+    # https://bugzilla.gnome.org/show_bug.cgi?id=622084#c12
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    GObject.idle_add(checkRotation)
+    # GObject.idle_add(checkPalmReject)
+    Gtk.main()
+
