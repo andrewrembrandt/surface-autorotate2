@@ -19,3 +19,23 @@ Section "InputClass"
 EndSection
 ```
 
+Edit the beginning of the autorotate2 script to have the correct configuration:
+
+```python
+#####CONFIGURATION#####
+sensorname="accel_3d"
+displayname="eDP1" # On some kernels/drivers this may be eDP-1
+
+inputnames=[
+        "NTRG0001:01 1B96:1B05"
+        ]
+
+pennames=[
+        "NTRG0001:01 1B96:1B05 Pen stylus",
+        "NTRG0001:01 1B96:1B05 Pen pad",
+        "NTRG0001:01 1B96:1B05 Pen eraser"
+        ]
+```
+
+You can confirm the device names by running `xinput` and `xrandr`
+

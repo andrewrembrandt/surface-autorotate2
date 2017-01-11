@@ -2,6 +2,7 @@
 
 #####CONFIGURATION#####
 sensorname="accel_3d"
+displayname="eDP1" # On some kernels/drivers this may be eDP-1
 
 inputnames=[
         "NTRG0001:01 1B96:1B05"
@@ -114,8 +115,7 @@ def rotate(orientation, matrix):
             penpattern = re.compile(pennames[i] + " *\tid=([0-9]+)\t")
             penmatches = re.findall(penpattern, output)
             for id in penmatches:
-                subprocess.call([xinput, "map-to-output", id, "eDP1"])
-                #subprocess.call([xinput, "set-prop", id, "Coordinate Transformation Matrix"] + [str(m) for m in matrix])
+                subprocess.call([xinput, "map-to-output", id, displayname])
             refreshTouch(matches[0])
 
 def toggleRotLock(event):
